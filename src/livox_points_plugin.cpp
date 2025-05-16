@@ -15,6 +15,7 @@
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include <omp.h>
 #include <geometry_msgs/msg/point32.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
 
 namespace gazebo
 {
@@ -124,56 +125,65 @@ namespace gazebo
             InitializeRays(points_pair, rayShape);
             rayShape->Update();
 
-            // For publishing PointCloud2 type messages
-            sensor_msgs::msg::PointCloud cloud;
-            cloud.header.stamp = node_->get_clock()->now();
-            cloud.header.frame_id = raySensor->Name();
-            auto &clouds = cloud.points;
+            // Create PointCloud2 message with intensity, tag, and line
+            sensor_msgs::msg::PointCloud2 cloud2;
+            cloud2.header.stamp = node_->get_clock()->now();
+            cloud2.header.frame_id = raySensor->Name();
 
-            // Iterate over ray scan point pairs
+            // Reserve space
+            int num_points = points_pair.size();
+            cloud2.height = 1;
+            cloud2.width = num_points;
+            cloud2.is_dense = false;
+            cloud2.is_bigendian = false;
 
-            // #pragma omp parallel
-            {
-                // Local cloud container for each thread
-                sensor_msgs::msg::PointCloud cloud_omp;
-                auto &clouds_omp = cloud_omp.points;
-                
-                // #pragma omp for
-                for (auto &pair : points_pair) {
-                    auto range = rayShape->GetRange(pair.first);
-                    auto intensity = rayShape->GetRetro(pair.first);
+            // Define fields: x, y, z, intensity, tag, line
+            sensor_msgs::PointCloud2Modifier modifier(cloud2);
+            modifier.setPointCloud2FieldsByString(1, "xyz");
+            modifier.setPointCloud2Fields(6,
+                "x", 1, sensor_msgs::msg::PointField::FLOAT32,
+                "y", 1, sensor_msgs::msg::PointField::FLOAT32,
+                "z", 1, sensor_msgs::msg::PointField::FLOAT32,
+                "intensity", 1, sensor_msgs::msg::PointField::FLOAT32,
+                "tag", 1, sensor_msgs::msg::PointField::UINT16,
+                "line", 1, sensor_msgs::msg::PointField::UINT16
+            );
+            modifier.resize(num_points);
 
-                    if (range >= RangeMax() || range <= RangeMin()) {
-                        range = 0;
-                    }
+            // Fill data
+            sensor_msgs::PointCloud2Iterator<float> iter_x(cloud2, "x");
+            sensor_msgs::PointCloud2Iterator<float> iter_y(cloud2, "y");
+            sensor_msgs::PointCloud2Iterator<float> iter_z(cloud2, "z");
+            sensor_msgs::PointCloud2Iterator<float> iter_intensity(cloud2, "intensity");
+            sensor_msgs::PointCloud2Iterator<uint16_t> iter_tag(cloud2, "tag");
+            sensor_msgs::PointCloud2Iterator<uint16_t> iter_line(cloud2, "line");
 
-                    // Calculate point cloud data
-                    auto rotate_info = pair.second;
-                    ignition::math::Quaterniond ray;
-                    ray.Euler(ignition::math::Vector3d(0.0, rotate_info.zenith, rotate_info.azimuth));
-                    auto axis = ray * ignition::math::Vector3d(1.0, 0.0, 0.0);
-                    auto point = range * axis;
+            for (auto &pair : points_pair) {
+                auto range = rayShape->GetRange(pair.first);
+                auto intensity = rayShape->GetRetro(pair.first);  // or set to 1.0
 
-                    // Fill the PointCloud point cloud message for this thread
-                    clouds_omp.emplace_back();
-                    clouds_omp.back().x = point.X();
-                    clouds_omp.back().y = point.Y();
-                    clouds_omp.back().z = point.Z();
+                if (range >= RangeMax() || range <= RangeMin()) {
+                    range = 0;
                 }
 
-                // After the loop, add the thread's data to the global cloud points
-                // #pragma omp critical
-                {
-                    // Append the local clouds_omp points to the global clouds
-                    clouds.insert(clouds.end(), clouds_omp.begin(), clouds_omp.end());
-                }
+                auto rotate_info = pair.second;
+                ignition::math::Quaterniond ray;
+                ray.Euler(ignition::math::Vector3d(0.0, rotate_info.zenith, rotate_info.azimuth));
+                auto axis = ray * ignition::math::Vector3d(1.0, 0.0, 0.0);
+                auto point = range * axis;
+
+                *iter_x = point.X();
+                *iter_y = point.Y();
+                *iter_z = point.Z();
+                *iter_intensity = static_cast<float>(intensity);  // or 1.0
+                *iter_tag = 0;   // dummy value
+                *iter_line = 0;  // dummy value
+
+                ++iter_x; ++iter_y; ++iter_z;
+                ++iter_intensity; ++iter_tag; ++iter_line;
             }
 
-
-            // Publish PointCloud2 type message
-            sensor_msgs::msg::PointCloud2 cloud2;
-            sensor_msgs::convertPointCloudToPointCloud2(cloud, cloud2);
-            cloud2.header = cloud.header;
+            // Publish
             cloud2_pub->publish(cloud2);
         }
     }

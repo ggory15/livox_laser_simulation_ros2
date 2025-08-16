@@ -13,6 +13,8 @@
   <xacro:property name="length" value="0.1" />
   <xacro:property name="width" value="0.06" />
   <xacro:property name="height" value="0.06" />
+  
+<xacro:property name="livox_share" value="$(find ros2_livox_simulation)"/>
 
   <xacro:macro name="box_inertia" params="m w h d">
     <inertial>
@@ -30,7 +32,7 @@
 <xacro:box_inertia m="${length}" w="${width}" d="${length}" h="${height}"/>
   <visual>
         <geometry>
-            <box size="${length} ${width} ${height}"/>
+            <mesh filename="file://${livox_share}/meshes/mid-360-scaled.dae"/>
         </geometry>
   </visual>
 </link>

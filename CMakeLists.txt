@@ -67,40 +67,11 @@ ament_export_libraries(
   ros2_livox
 )
 
-set(CSV_FILES
-    scan_mode/mid40.csv
-    scan_mode/mid70.csv
-    scan_mode/mid360.csv
-    scan_mode/tele.csv
-    scan_mode/horizon.csv
-    scan_mode/HAP.csv
-    scan_mode/avia.csv
-)
-foreach(CSV_FILE ${CSV_FILES})
-    configure_file(${CSV_FILE} ${CMAKE_CURRENT_BINARY_DIR}/${CSV_FILE} COPYONLY)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${CSV_FILE}
-        DESTINATION share/${PROJECT_NAME}/scan_mode
+foreach(dir meshes urdf scan_mode)
+    install(
+        DIRECTORY ${dir}/
+        DESTINATION share/${PROJECT_NAME}/${dir}
     )
-endforeach()
-
-set(URDF_FILES
-    urdf/mid40.xacro
-    urdf/mid70.xacro
-    urdf/mid360.xacro
-    urdf/tele.xacro
-    urdf/horizon.xacro
-    urdf/HAP.xacro
-    urdf/avia.xacro
-)
-foreach(URDF_FILES ${URDF_FILES})
-    configure_file(${URDF_FILES} ${CMAKE_CURRENT_BINARY_DIR}/${URDF_FILES} COPYONLY)
-    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${URDF_FILES}
-        DESTINATION share/${PROJECT_NAME}/urdf
-    )
-endforeach()
-
-foreach(dir meshes )
-    install(DIRECTORY ${dir} DESTINATION share/${PROJECT_NAME})
 endforeach(dir)
 
 ament_package()

@@ -1,4 +1,7 @@
 # livox_laser_simulation for ROS2
+
+**Note:** This is a forked version of the original repository. This version includes the mesh file in the URDF.
+
 This is a ros2 port of the original repo: https://github.com/Livox-SDK/livox_laser_simulation.
 
 Tested in ros2 foxy and humble.
@@ -15,7 +18,7 @@ Therefore, by subscribing to the `CustomMsg` message, you can use the FAST_LIO a
 1. Clone this repo in your ros2 workspace
 
     ```
-    git clone https://github.com/LihanChen2004/livox_laser_simulation_ros2.git
+    git clone https://github.com/ggory15/livox_laser_simulation_ros2.git
     ```
 
 2. Follow [livox_ros_driver2 Installation](https://github.com/Livox-SDK/livox_ros_driver2)

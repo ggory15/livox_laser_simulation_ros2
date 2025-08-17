@@ -1,21 +1,21 @@
-#include <rclcpp/rclcpp.hpp>
-#include <gazebo_ros/node.hpp>
-#include <rclcpp/logging.hpp>
-
+#include <boost/chrono.hpp>
 #include <gazebo/physics/Model.hh>
-#include <gazebo/physics/MultiRayShape.hh>// Store the latest laser scans into laserMsg
+#include <gazebo/physics/MultiRayShape.hh>  // Store the latest laser scans into laserMsg
 #include <gazebo/physics/PhysicsEngine.hh>
 #include <gazebo/physics/World.hh>
 #include <gazebo/sensors/RaySensor.hh>
 #include <gazebo/transport/Node.hh>
-#include <chrono>
-#include "ros2_livox/livox_points_plugin.h"
-#include "ros2_livox/csv_reader.hpp"
-#include "ros2_livox/livox_ode_multiray_shape.h"
+#include <gazebo_ros/node.hpp>
 #include <livox_ros_driver2/msg/custom_msg.hpp>
-#include <omp.h>
-#include <geometry_msgs/msg/point32.hpp>
+#include <livox_ros_driver2/msg/custom_point.hpp>
+#include <rclcpp/logging.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+
+#include "ros2_livox/csv_reader.hpp"
+#include "ros2_livox/livox_points_plugin.h"
+#include "ros2_livox/livox_ode_multiray_shape.h"
 
 namespace gazebo
 {
@@ -26,28 +26,33 @@ namespace gazebo
 
     LivoxPointsPlugin::~LivoxPointsPlugin() {}
 
-    void convertDataToRotateInfo(const std::vector<std::vector<double>> &datas, std::vector<AviaRotateInfo> &avia_infos) {
+    void convertDataToRotateInfo(const std::vector<std::vector<double>> &datas, std::vector<AviaRotateInfo> &avia_infos)
+    {
         avia_infos.reserve(datas.size());
         double deg_2_rad = M_PI / 180.0;
-        for (auto &data : datas) {
-            if (data.size() == 3) {
+        for (auto &data : datas)
+        {
+            if (data.size() == 3)
+            {
                 avia_infos.emplace_back();
                 avia_infos.back().time = data[0];
                 avia_infos.back().azimuth = data[1] * deg_2_rad;
                 avia_infos.back().zenith = data[2] * deg_2_rad - M_PI_2; //转化成标准的右手系角度
             } else {
             RCLCPP_ERROR(rclcpp::get_logger("convertDataToRotateInfo"), "data size is not 3!");
-            }
+        }
         }
     }
 
-    void LivoxPointsPlugin::Load(gazebo::sensors::SensorPtr _parent, sdf::ElementPtr sdf) {
+    void LivoxPointsPlugin::Load(gazebo::sensors::SensorPtr _parent, sdf::ElementPtr sdf)
+    {
         node_ = gazebo_ros::Node::Get(sdf);
         
         std::vector<std::vector<double>> datas;
         std::string file_name = sdf->Get<std::string>("csv_file_name");
         RCLCPP_INFO(rclcpp::get_logger("LivoxPointsPlugin"), "load csv file name: %s", file_name.c_str());
-        if (!CsvReader::ReadCsvFile(file_name, datas)) {   
+        if (!CsvReader::ReadCsvFile(file_name, datas))
+        {   
             RCLCPP_INFO(rclcpp::get_logger("LivoxPointsPlugin"), "cannot get csv file! %s will return !", file_name.c_str());
             return;
         }
@@ -70,7 +75,9 @@ namespace gazebo
         node = transport::NodePtr(new transport::Node());
         node->Init(raySensor->WorldName());
         // PointCloud2 publisher
-        cloud2_pub = node_->create_publisher<sensor_msgs::msg::PointCloud2>(curr_scan_topic, 10);
+        cloud2_pub = node_->create_publisher<sensor_msgs::msg::PointCloud2>(curr_scan_topic + "/pointcloud", 10);
+        // CustomMsg publisher
+        custom_pub = node_->create_publisher<livox_ros_driver2::msg::CustomMsg>(curr_scan_topic, 10);
 
         scanPub = node->Advertise<msgs::LaserScanStamped>(curr_scan_topic+"laserscan", 50);
 
@@ -93,7 +100,8 @@ namespace gazebo
         laserCollision->SetShape(rayShape);
         samplesStep = sdfPtr->Get<int>("samples");
         downSample = sdfPtr->Get<int>("downsample");
-        if (downSample < 1) {
+        if (downSample < 1)
+        {
             downSample = 1;
         }
         RCLCPP_INFO(rclcpp::get_logger("LivoxPointsPlugin"), "sample: %ld", samplesStep);
@@ -105,7 +113,8 @@ namespace gazebo
         maxDist = rangeElem->Get<double>("max");
         auto offset = laserCollision->RelativePose();
         ignition::math::Vector3d start_point, end_point;
-        for (int j = 0; j < samplesStep; j += downSample) {
+        for (int j = 0; j < samplesStep; j += downSample)
+        {
             int index = j % maxPointSize;
             auto &rotate_info = aviaInfos[index];
             ignition::math::Quaterniond ray;
@@ -117,79 +126,100 @@ namespace gazebo
         }
     }
 
+
+
     void LivoxPointsPlugin::OnNewLaserScans() {
-        // Check if rayShape has been initialized
-        if (rayShape) {
-            std::vector<std::pair<int, AviaRotateInfo>> points_pair;
-            // Initialize ray scan point pairs
-            InitializeRays(points_pair, rayShape);
-            rayShape->Update();
+        if (!rayShape) {
+            return; // 检查是否已经初始化了 rayShape
+        }
 
-            // Create PointCloud2 message with intensity, tag, and line
-            sensor_msgs::msg::PointCloud2 cloud2;
-            cloud2.header.stamp = node_->get_clock()->now();
-            cloud2.header.frame_id = raySensor->Name();
+        std::vector<std::pair<int, AviaRotateInfo>> points_pair;
+        InitializeRays(points_pair, rayShape);
+        rayShape->Update();
 
-            // Reserve space
-            int num_points = points_pair.size();
-            cloud2.height = 1;
-            cloud2.width = num_points;
-            cloud2.is_dense = false;
-            cloud2.is_bigendian = false;
+        msgs::Set(laserMsg.mutable_time(), world->SimTime());
+        msgs::LaserScan *scan = laserMsg.mutable_scan();
+        InitializeScan(scan);
 
-            // Define fields: x, y, z, intensity, tag, line
-            sensor_msgs::PointCloud2Modifier modifier(cloud2);
-            modifier.setPointCloud2FieldsByString(1, "xyz");
-            modifier.setPointCloud2Fields(6,
-                "x", 1, sensor_msgs::msg::PointField::FLOAT32,
-                "y", 1, sensor_msgs::msg::PointField::FLOAT32,
-                "z", 1, sensor_msgs::msg::PointField::FLOAT32,
-                "intensity", 1, sensor_msgs::msg::PointField::FLOAT32,
-                "tag", 1, sensor_msgs::msg::PointField::UINT16,
-                "line", 1, sensor_msgs::msg::PointField::UINT16
-            );
-            modifier.resize(num_points);
+        // 创建自定义消息 pp_livox，用于发布 Livox CustomMsg 类型消息
+        livox_ros_driver2::msg::CustomMsg pp_livox;
+        pp_livox.header.stamp = node_->get_clock()->now();
+        pp_livox.header.frame_id = raySensor->Name();
+        int count = 0;
+        boost::chrono::high_resolution_clock::time_point start_time = boost::chrono::high_resolution_clock::now();
 
-            // Fill data
-            sensor_msgs::PointCloud2Iterator<float> iter_x(cloud2, "x");
-            sensor_msgs::PointCloud2Iterator<float> iter_y(cloud2, "y");
-            sensor_msgs::PointCloud2Iterator<float> iter_z(cloud2, "z");
-            sensor_msgs::PointCloud2Iterator<float> iter_intensity(cloud2, "intensity");
-            sensor_msgs::PointCloud2Iterator<uint16_t> iter_tag(cloud2, "tag");
-            sensor_msgs::PointCloud2Iterator<uint16_t> iter_line(cloud2, "line");
+        // 用于 PointCloud2 类型消息发布
+        sensor_msgs::msg::PointCloud2 cloud2;
+        cloud2.header.stamp = node_->get_clock()->now();
+        cloud2.header.frame_id = raySensor->Name();
 
-            for (auto &pair : points_pair) {
-                auto range = rayShape->GetRange(pair.first);
-                auto intensity = rayShape->GetRetro(pair.first);  // or set to 1.0
+        sensor_msgs::PointCloud2Modifier modifier(cloud2);
+        modifier.setPointCloud2FieldsByString(2, "xyz", "rgb");
+        modifier.resize(points_pair.size());
 
-                if (range >= RangeMax() || range <= RangeMin()) {
-                    range = 0;
-                }
+        sensor_msgs::PointCloud2Iterator<float> out_x(cloud2, "x");
+        sensor_msgs::PointCloud2Iterator<float> out_y(cloud2, "y");
+        sensor_msgs::PointCloud2Iterator<float> out_z(cloud2, "z");
 
-                auto rotate_info = pair.second;
-                ignition::math::Quaterniond ray;
-                ray.Euler(ignition::math::Vector3d(0.0, rotate_info.zenith, rotate_info.azimuth));
-                auto axis = ray * ignition::math::Vector3d(1.0, 0.0, 0.0);
-                auto point = range * axis;
+        // 遍历射线扫描点对
+        for (const auto &pair : points_pair) {
+            auto range = rayShape->GetRange(pair.first);
+            auto intensity = rayShape->GetRetro(pair.first);
 
-                *iter_x = point.X();
-                *iter_y = point.Y();
-                *iter_z = point.Z();
-                *iter_intensity = static_cast<float>(intensity);  // or 1.0
-                *iter_tag = 0;   // dummy value
-                *iter_line = 0;  // dummy value
-
-                ++iter_x; ++iter_y; ++iter_z;
-                ++iter_intensity; ++iter_tag; ++iter_line;
+            // 处理超出范围的数据
+            if (range <= RangeMin() || range >= RangeMax()) {
+                range = 0;
             }
 
-            // Publish
-            cloud2_pub->publish(cloud2);
+            // 计算点云数据
+            auto rotate_info = pair.second;
+            ignition::math::Quaterniond ray;
+            ray.Euler(ignition::math::Vector3d(0.0, rotate_info.zenith, rotate_info.azimuth));
+            auto axis = ray * ignition::math::Vector3d(1.0, 0.0, 0.0);
+            auto point = range * axis;
+
+            // 填充 CustomMsg 点云消息
+            livox_ros_driver2::msg::CustomPoint p;
+            p.x = point.X();
+            p.y = point.Y();
+            p.z = point.Z();
+            p.reflectivity = intensity;
+
+            // 填充 PointCloud2 点云消息
+            *out_x = point.X();
+            *out_y = point.Y();
+            *out_z = point.Z();
+
+            ++out_x;
+            ++out_y;
+            ++out_z;
+
+            // 计算时间戳偏移
+            boost::chrono::high_resolution_clock::time_point end_time = boost::chrono::high_resolution_clock::now();
+            boost::chrono::nanoseconds elapsed_time = boost::chrono::duration_cast<boost::chrono::nanoseconds>(end_time - start_time);
+            p.offset_time = elapsed_time.count();
+
+            // 将点云数据添加到 CustomMsg 消息中
+            pp_livox.points.push_back(p);
+            count++;
         }
+
+        if (scanPub && scanPub->HasConnections()) {
+            scanPub->Publish(laserMsg);
+        }
+
+        // 发布 CustomMsg 消息
+        pp_livox.point_num = count;
+        custom_pub->publish(pp_livox);
+
+        // 发布 PointCloud2 类型消息
+        cloud2_pub->publish(cloud2);
     }
 
+
     void LivoxPointsPlugin::InitializeRays(std::vector<std::pair<int, AviaRotateInfo>> &points_pair,
-                                           boost::shared_ptr<physics::LivoxOdeMultiRayShape> &ray_shape) {
+                                           boost::shared_ptr<physics::LivoxOdeMultiRayShape> &ray_shape)
+    {
         auto &rays = ray_shape->RayShapes();
         ignition::math::Vector3d start_point, end_point;
         ignition::math::Quaterniond ray;
@@ -198,16 +228,16 @@ namespace gazebo
         long unsigned int ray_index = 0;
         auto ray_size = rays.size();
         points_pair.reserve(rays.size());
-
-        // #pragma omp parallel for
-        for (int k = currStartIndex; k < end_index; k += downSample) {
+        for (int k = currStartIndex; k < end_index; k += downSample)
+        {
             auto index = k % maxPointSize;
             auto &rotate_info = aviaInfos[index];
             ray.Euler(ignition::math::Vector3d(0.0, rotate_info.zenith, rotate_info.azimuth));
             auto axis = offset.Rot() * ray * ignition::math::Vector3d(1.0, 0.0, 0.0);
             start_point = minDist * axis + offset.Pos();
             end_point = maxDist * axis + offset.Pos();
-            if (ray_index < ray_size) {
+            if (ray_index < ray_size)
+            {
                 rays[ray_index]->SetPoints(start_point, end_point);
                 points_pair.emplace_back(ray_index, rotate_info);
             }
@@ -216,7 +246,8 @@ namespace gazebo
         currStartIndex += samplesStep;
     }
 
-    void LivoxPointsPlugin::InitializeScan(msgs::LaserScan *&scan) {
+    void LivoxPointsPlugin::InitializeScan(msgs::LaserScan *&scan)
+    {
         // Store the latest laser scans into laserMsg
         msgs::Set(scan->mutable_world_pose(), raySensor->Pose() + parentEntity->WorldPose());
         scan->set_angle_min(AngleMin().Radian());
